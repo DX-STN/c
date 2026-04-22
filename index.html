@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+<style>
+body { margin:0; background:#111; overflow:hidden; display:flex; flex-direction:column; align-items:center; }
+
+.canvas { width:90vw; margin:10px 0; background:#222; position:relative; overflow:hidden; touch-action:none; }
+
+#nav-container { height:30vh; }
+#main-container { height:50vh; background:#333; }
+
+#main-img,#nav-img{
+ position:absolute;
+ top:0; left:0;
+ transform-origin:0 0;
+ pointer-events:none;
+ display:none;
+ image-rendering:pixelated;
+}
+
+.crop-box{
+ position:absolute;
+ border:2px solid #4da3ff;
+ box-sizing:border-box;
+ pointer-events:none;
+ display:none;
+}
+
+.nav-box{
+ position:absolute;
+ border:1px solid red;
+ background:rgba(255,0,0,.2);
+ pointer-events:none;
+ display:none;
+}
+
+.handle{
+ position:absolute;
+ background:rgba(0,100,255,.25);
+ pointer-events:auto;
+ z-index:30;
+}
+
+.h-n,.h-s{ height:40px; transform:translateY(-20px); }
+.h-e,.h-w{ width:40px; transform:translateX(-20px); }
+</style>
+</head>
+
+<body>
+
+<div id="nav-container" class="canvas">
+ <img id="nav-img">
+ <div id="nav-box" class="nav-box"></div>
+</div>
+
+<div id="main-container" class="canvas">
+ <img id="main-img">
+ <div id="crop-box" class="crop-box"></div>
+
+ <div id="hn" class="handle h-n" data-edge="n"></div>
+ <div id="hs" class="handle h-s" data-edge="s"></div>
+ <div id="he" class="handle h-e" data-edge="e"></div>
+ <div id="hw" class="handle h-w" data-edge="w"></div>
+</div>
+
+<input type="file" id="file-input" accept="image/*">
+
+<script>
+const navImg = document.getElementById('nav-img');
+const mainImg = document.getElementById('main-img');
+const navBox = document.getElementById('nav-box');
+const cropBox = document.getElementById('crop-box');
+const mCont = document.getElementById('main-container');
+const nCont = document.getElementById('nav-container');
+
+const handles = {
+ n: document.getElementById('hn'),
+ s: document.getElementById('hs'),
+ e: document.getElementById('he'),
+ w: document.getElementById('hw')
+};
+
+let img = { w:0, h:0, isLoaded:false };
+let view = { x:0, y:0, scale:1 };
+
+// ★ 画像ピクセル座標
+let crop = { x:0, y:0, w:0, h:0 };
+
+let touch = { mode:'', edge:'', lastX:0, lastY:0 };
+let pinch = { startDist:0, startScale:1 };
+let start = {};
+
+/* ===== 画像 ===== */
+document.getElementById('file-input').onchange = (e)=>{
+ const file = e.target.files[0];
+ if(!file) return;
+
+ const reader = new FileReader();
+ reader.onload = ev=>{
+  navImg.src = mainImg.src = ev.target.result;
+
+  mainImg.onload = ()=>{
+   img.w = mainImg.naturalWidth;
+   img.h = mainImg.naturalHeight;
+   img.isLoaded = true;
+
+   const r = mCont.getBoundingClientRect();
+
+   view.scale = Math.min(r.width/img.w, r.height/img.h);
+   view.x = (r.width - img.w*view.scale)/2;
+   view.y = (r.height - img.h*view.scale)/2;
+
+   crop = { x:0, y:0, w:img.w, h:img.h };
+
+   mainImg.style.display =
+   navImg.style.display =
+   cropBox.style.display =
+   navBox.style.display = 'block';
+
+   update();
+  };
+ };
+ reader.readAsDataURL(file);
+};
+
+/* ===== タッチ開始 ===== */
+mCont.addEventListener('touchstart', e=>{
+ if(!img.isLoaded) return;
+
+ if(e.touches.length===2){
+  touch.mode='pinch';
+
+  const dx = e.touches[0].pageX - e.touches[1].pageX;
+  const dy = e.touches[0].pageY - e.touches[1].pageY;
+
+  pinch.startDist = Math.hypot(dx,dy);
+  pinch.startScale = view.scale;
+  return;
+ }
+
+ if(e.target.classList.contains('handle')){
+  touch.mode='edit';
+  touch.edge=e.target.dataset.edge;
+
+  start.crop = {...crop};
+  start.x = e.touches[0].pageX;
+  start.y = e.touches[0].pageY;
+ }else{
+  touch.mode='scroll';
+ }
+
+ touch.lastX = e.touches[0].pageX;
+ touch.lastY = e.touches[0].pageY;
+});
+
+/* ===== タッチ移動 ===== */
+mCont.addEventListener('touchmove', e=>{
+ if(!touch.mode) return;
+
+ // ピンチ
+ if(touch.mode==='pinch' && e.touches.length===2){
+  e.preventDefault();
+
+  const dx = e.touches[0].pageX - e.touches[1].pageX;
+  const dy = e.touches[0].pageY - e.touches[1].pageY;
+  const dist = Math.hypot(dx,dy);
+
+  const scale = pinch.startScale * (dist / pinch.startDist);
+
+  const cx = (e.touches[0].pageX + e.touches[1].pageX)/2;
+  const cy = (e.touches[0].pageY + e.touches[1].pageY)/2;
+
+  const ix = (cx - view.x) / view.scale;
+  const iy = (cy - view.y) / view.scale;
+
+  view.scale = scale;
+  view.x = cx - ix * view.scale;
+  view.y = cy - iy * view.scale;
+
+  update();
+  return;
+ }
+
+ e.preventDefault();
+
+ const dx = e.touches[0].pageX - touch.lastX;
+ const dy = e.touches[0].pageY - touch.lastY;
+
+ if(touch.mode==='scroll'){
+  view.x += dx;
+  view.y += dy;
+ }
+
+ if(touch.mode==='edit'){
+  const totalDx = e.touches[0].pageX - start.x;
+  const totalDy = e.touches[0].pageY - start.y;
+
+  const dxi = Math.round(totalDx / view.scale);
+  const dyi = Math.round(totalDy / view.scale);
+
+  const min = 1;
+
+  if(touch.edge==='n'){
+   let y = start.crop.y + dyi;
+   y = Math.max(0, Math.min(y, start.crop.y + start.crop.h - min));
+   crop.y = y;
+   crop.h = start.crop.y + start.crop.h - y;
+  }
+
+  if(touch.edge==='s'){
+   let h = start.crop.h + dyi;
+   h = Math.max(min, Math.min(h, img.h - start.crop.y));
+   crop.h = h;
+  }
+
+  if(touch.edge==='e'){
+   let w = start.crop.w + dxi;
+   w = Math.max(min, Math.min(w, img.w - start.crop.x));
+   crop.w = w;
+  }
+
+  if(touch.edge==='w'){
+   let x = start.crop.x + dxi;
+   x = Math.max(0, Math.min(x, start.crop.x + start.crop.w - min));
+   crop.x = x;
+   crop.w = start.crop.x + start.crop.w - x;
+  }
+ }
+
+ touch.lastX = e.touches[0].pageX;
+ touch.lastY = e.touches[0].pageY;
+
+ update();
+});
+
+/* ===== タッチ終了 ===== */
+mCont.addEventListener('touchend', ()=>{ touch.mode=''; });
+
+/* ===== 描画 ===== */
+function update(){
+ if(!img.isLoaded) return;
+
+ mainImg.style.transform =
+  `translate(${view.x}px,${view.y}px) scale(${view.scale})`;
+
+ const x = view.x + crop.x * view.scale;
+ const y = view.y + crop.y * view.scale;
+ const w = crop.w * view.scale;
+ const h = crop.h * view.scale;
+
+ cropBox.style.left = x+'px';
+ cropBox.style.top  = y+'px';
+ cropBox.style.width  = w+'px';
+ cropBox.style.height = h+'px';
+
+ handles.n.style.left = x+'px';
+ handles.n.style.width = w+'px';
+ handles.n.style.top = y+'px';
+
+ handles.s.style.left = x+'px';
+ handles.s.style.width = w+'px';
+ handles.s.style.top = (y+h)+'px';
+
+ handles.w.style.top = y+'px';
+ handles.w.style.height = h+'px';
+ handles.w.style.left = x+'px';
+
+ handles.e.style.top = y+'px';
+ handles.e.style.height = h+'px';
+ handles.e.style.left = (x+w)+'px';
+
+ const r = nCont.getBoundingClientRect();
+ const s = Math.min(r.width/img.w, r.height/img.h);
+ const nx = (r.width - img.w*s)/2;
+ const ny = (r.height - img.h*s)/2;
+
+ navImg.style.transform =
+  `translate(${nx}px,${ny}px) scale(${s})`;
+
+ navBox.style.left = nx + crop.x * s + 'px';
+ navBox.style.top  = ny + crop.y * s + 'px';
+ navBox.style.width  = crop.w * s + 'px';
+ navBox.style.height = crop.h * s + 'px';
+}
+</script>
+
+</body>
+</html>
